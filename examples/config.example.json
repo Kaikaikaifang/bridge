@@ -1,0 +1,51 @@
+{
+  "defaultChannel": "cli",
+  "defaultAgent": "codex",
+  "workspace": "~/agent-bridge-workspace",
+  "allowUsers": [],
+  "allowedWorkspaceRoots": ["~/projects", "~/agent-bridge-workspace"],
+  "agents": {
+    "codex": {
+      "command": "codex",
+      "sandbox": "read-only",
+      "approval": "never",
+      "model": null,
+      "timeoutMs": 300000
+    },
+    "claude": {
+      "command": "claude",
+      "model": "sonnet",
+      "permissionMode": "dontAsk",
+      "tools": "default",
+      "timeoutMs": 300000
+    },
+    "codebuddy": {
+      "command": "codebuddy",
+      "permissionMode": "dontAsk",
+      "timeoutMs": 300000
+    },
+    "opencode": {
+      "command": "opencode",
+      "timeoutMs": 300000
+    },
+    "my-custom-tool": {
+      "type": "generic",
+      "command": "my-ai-tool",
+      "stdinPrompt": true,
+      "timeoutMs": 300000
+    }
+  },
+  "channels": {
+    "weixin": {
+      "baseUrl": "https://ilinkai.weixin.qq.com",
+      "botType": "3"
+    },
+    "feishu": {
+      "enabled": false
+    },
+    "cli": {
+      "prompt": "bridge> ",
+      "history": true
+    }
+  }
+}
