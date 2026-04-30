@@ -11,12 +11,13 @@ import type {
 	OutgoingMessage,
 } from "../../core/types.js";
 import { JsonStore } from "../../storage/json-store.js";
-import { apiGet, apiPost } from "./api.js";
+import { ApiTimeoutError, apiGet, apiPost } from "./api.js";
 import type { GetUpdatesResp, WeixinMessage, WeixinSession } from "./types.js";
 
 const DEFAULT_BASE_URL = "https://ilinkai.weixin.qq.com";
 const LONG_POLL_TIMEOUT_MS = 38_000;
 const SEND_TIMEOUT_MS = 15_000;
+const STOP_NOTIFY_TIMEOUT_MS = 2_000;
 const LOGIN_TIMEOUT_MS = 5 * 60_000;
 const LOGIN_POLL_INTERVAL_MS = 1_000;
 const MAX_CONSECUTIVE_FAILURES = 3;
@@ -72,6 +73,7 @@ export class WeixinChannel implements ChannelAdapter {
 		this.running = true;
 		this.abortController = new AbortController();
 		this.session = await this.loadOrLogin(runtime);
+		if (this.session.userId) runtime.authorizeUser?.(this.session.userId);
 		runtime.log(`微信通道已启动，Bot：${this.session.accountId}`);
 
 		await this.notifyStart(runtime);
@@ -88,6 +90,7 @@ export class WeixinChannel implements ChannelAdapter {
 					token: this.session.token,
 					channelVersion: this.config.channelVersion ?? "1.0.2",
 					timeoutMs: LONG_POLL_TIMEOUT_MS,
+					signal: this.abortController.signal,
 					silentTimeout: true,
 				});
 				const next = resp ?? { ret: 0, msgs: [], get_updates_buf: sync.buf };
@@ -118,6 +121,7 @@ export class WeixinChannel implements ChannelAdapter {
 						}
 						if (!this.running) break;
 						this.session = await this.loadOrLogin(runtime);
+						if (this.session.userId) runtime.authorizeUser?.(this.session.userId);
 						await this.notifyStart(runtime);
 						consecutiveFailures = 0;
 						continue;
@@ -213,7 +217,7 @@ export class WeixinChannel implements ChannelAdapter {
 					body: {},
 					token: this.session.token,
 					channelVersion: this.config.channelVersion ?? "1.0.2",
-					timeoutMs: SEND_TIMEOUT_MS,
+					timeoutMs: STOP_NOTIFY_TIMEOUT_MS,
 				});
 			} catch {
 				/* best effort */
@@ -335,11 +339,23 @@ export class WeixinChannel implements ChannelAdapter {
 		const deadline = Date.now() + LOGIN_TIMEOUT_MS;
 		const currentQrcode = qrResp.qrcode;
 		while (Date.now() < deadline) {
-			const status = await apiGet<Record<string, string>>({
-				baseUrl,
-				endpoint: `ilink/bot/get_qrcode_status?qrcode=${encodeURIComponent(currentQrcode)}`,
-				timeoutMs: SEND_TIMEOUT_MS,
-			});
+			let status: Record<string, string>;
+			try {
+				status = await apiGet<Record<string, string>>({
+					baseUrl,
+					endpoint: `ilink/bot/get_qrcode_status?qrcode=${encodeURIComponent(currentQrcode)}`,
+					timeoutMs: SEND_TIMEOUT_MS,
+				});
+			} catch (err) {
+				if (!(err instanceof ApiTimeoutError)) throw err;
+				runtime.error("微信登录状态查询超时，继续等待扫码确认...");
+				try {
+					await sleep(LOGIN_POLL_INTERVAL_MS, this.abortController.signal);
+				} catch {
+					throw new Error("登录已取消");
+				}
+				continue;
+			}
 			if (status.status === "confirmed") {
 				const session: WeixinSession = {
 					token: status.bot_token,

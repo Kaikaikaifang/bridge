@@ -44,6 +44,7 @@ export interface AgentProvider {
 
 export type ChannelRuntime = {
 	onMessage(message: ChatMessage): Promise<void>;
+	authorizeUser?(userId: string): void;
 	log(message: string): void;
 	error(message: string): void;
 };

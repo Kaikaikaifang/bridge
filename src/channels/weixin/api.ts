@@ -1,5 +1,34 @@
 import crypto from "node:crypto";
 
+export class ApiTimeoutError extends Error {
+	constructor(
+		readonly method: string,
+		readonly endpoint: string,
+		readonly timeoutMs: number,
+	) {
+		super(`${method} ${endpoint} timed out after ${timeoutMs}ms`);
+		this.name = "ApiTimeoutError";
+	}
+}
+
+function isAbortError(err: unknown): boolean {
+	return err instanceof Error && err.name === "AbortError";
+}
+
+function linkAbortSignal(
+	controller: AbortController,
+	signal: AbortSignal | undefined,
+): (() => void) | undefined {
+	if (!signal) return undefined;
+	if (signal.aborted) {
+		controller.abort();
+		return undefined;
+	}
+	const abort = () => controller.abort();
+	signal.addEventListener("abort", abort, { once: true });
+	return () => signal.removeEventListener("abort", abort);
+}
+
 function randomWechatUin(): string {
 	const uint32 = crypto.randomBytes(4).readUInt32BE(0);
 	return Buffer.from(String(uint32), "utf-8").toString("base64");
@@ -26,11 +55,17 @@ export async function apiGet<T>(params: {
 	baseUrl: string;
 	endpoint: string;
 	timeoutMs?: number;
+	signal?: AbortSignal;
 }): Promise<T> {
 	const url = `${params.baseUrl.replace(/\/$/, "")}/${params.endpoint}`;
 	const controller = new AbortController();
+	let timedOut = false;
+	const unlinkAbortSignal = linkAbortSignal(controller, params.signal);
 	const timer = params.timeoutMs
-		? setTimeout(() => controller.abort(), params.timeoutMs)
+		? setTimeout(() => {
+				timedOut = true;
+				controller.abort();
+			}, params.timeoutMs)
 		: undefined;
 	try {
 		const res = await fetch(url, {
@@ -43,7 +78,14 @@ export async function apiGet<T>(params: {
 		return JSON.parse(text) as T;
 	} catch (err) {
 		if (timer) clearTimeout(timer);
+		unlinkAbortSignal?.();
+		if (isAbortError(err) && params.timeoutMs && timedOut) {
+			throw new ApiTimeoutError("GET", params.endpoint, params.timeoutMs);
+		}
 		throw err;
+	} finally {
+		if (timer) clearTimeout(timer);
+		unlinkAbortSignal?.();
 	}
 }
 
@@ -54,6 +96,7 @@ export type ApiPostOptions = {
 	token?: string;
 	channelVersion: string;
 	timeoutMs: number;
+	signal?: AbortSignal;
 	/** When true, client-side timeout (AbortError) returns null instead of throwing.
 	 *  Use this for long-polling endpoints like getUpdates. */
 	silentTimeout?: boolean;
@@ -66,7 +109,12 @@ export async function apiPost<T>(params: ApiPostOptions): Promise<T | null> {
 		base_info: { channel_version: params.channelVersion },
 	};
 	const controller = new AbortController();
-	const timer = setTimeout(() => controller.abort(), params.timeoutMs);
+	let timedOut = false;
+	const unlinkAbortSignal = linkAbortSignal(controller, params.signal);
+	const timer = setTimeout(() => {
+		timedOut = true;
+		controller.abort();
+	}, params.timeoutMs);
 	try {
 		const res = await fetch(url, {
 			method: "POST",
@@ -81,12 +129,15 @@ export async function apiPost<T>(params: ApiPostOptions): Promise<T | null> {
 		return JSON.parse(text) as T;
 	} catch (err) {
 		clearTimeout(timer);
-		if (err instanceof Error && err.name === "AbortError") {
+		unlinkAbortSignal?.();
+		if (isAbortError(err)) {
 			if (params.silentTimeout) return null;
-			throw new Error(
-				`POST ${params.endpoint} timed out after ${params.timeoutMs}ms`,
-			);
+			if (!timedOut) throw err;
+			throw new ApiTimeoutError("POST", params.endpoint, params.timeoutMs);
 		}
 		throw err;
+	} finally {
+		clearTimeout(timer);
+		unlinkAbortSignal?.();
 	}
 }

@@ -91,10 +91,16 @@ export function getDefaultConfigPath(): string {
 	return path.join(getStateDir(), "config.json");
 }
 
+export function resolveConfigPath(
+	configPath = process.env.AGENT_BRIDGE_CONFIG || getDefaultConfigPath(),
+): string {
+	return expandHome(configPath);
+}
+
 export function loadConfig(
 	configPath = process.env.AGENT_BRIDGE_CONFIG || getDefaultConfigPath(),
 ): BridgeConfig {
-	const resolvedConfigPath = expandHome(configPath);
+	const resolvedConfigPath = resolveConfigPath(configPath);
 	let userConfig: Record<string, unknown> = {};
 	if (fs.existsSync(resolvedConfigPath)) {
 		try {
@@ -118,6 +124,40 @@ export function loadConfig(
 	config.allowedWorkspaceRoots = config.allowedWorkspaceRoots.map(resolvePath);
 
 	return config;
+}
+
+export function addAllowUserToConfig(userId: string, configPath?: string): boolean {
+	const resolvedConfigPath = resolveConfigPath(configPath);
+	let userConfig: Record<string, unknown> = {};
+	if (fs.existsSync(resolvedConfigPath)) {
+		userConfig = JSON.parse(
+			fs.readFileSync(resolvedConfigPath, "utf-8"),
+		) as Record<string, unknown>;
+	}
+
+	const currentAllowUsers = Array.isArray(userConfig.allowUsers)
+		? userConfig.allowUsers.filter(
+				(value): value is string => typeof value === "string",
+			)
+		: [];
+	if (currentAllowUsers.includes(userId)) return false;
+
+	fs.mkdirSync(path.dirname(resolvedConfigPath), { recursive: true });
+	const nextConfig = {
+		...userConfig,
+		allowUsers: [...currentAllowUsers, userId],
+	};
+	fs.writeFileSync(
+		resolvedConfigPath,
+		`${JSON.stringify(nextConfig, null, 2)}\n`,
+		"utf-8",
+	);
+	try {
+		fs.chmodSync(resolvedConfigPath, 0o600);
+	} catch {
+		/* ignore */
+	}
+	return true;
 }
 
 export function resolveProjectRoot(): string {

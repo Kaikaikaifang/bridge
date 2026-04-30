@@ -94,14 +94,18 @@ async function main(): Promise<void> {
 		process.exit(1);
 	}
 
-	if (channelName !== "cli" && config.allowUsers.length === 0) {
+	if (channelName === "weixin" && config.allowUsers.length === 0) {
+		console.warn(
+			"提示：allowUsers 为空。微信扫码登录成功后，会自动授权本次登录的用户 ID。",
+		);
+	} else if (channelName !== "cli" && config.allowUsers.length === 0) {
 		console.warn(
 			"警告：allowUsers 为空。当前不会执行任何真实用户消息，请先在配置中加入允许的用户 ID。",
 		);
 	}
 
 	const channel = createChannel(channelName, config);
-	const runtime = new BridgeRuntime(config, agents, channel);
+	const runtime = new BridgeRuntime(config, agents, channel, configPath);
 
 	let shuttingDown = false;
 	const shutdown = async () => {

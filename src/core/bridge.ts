@@ -1,4 +1,5 @@
 import type { BridgeConfig } from "../config/schema.js";
+import { addAllowUserToConfig } from "../config/load.js";
 import { StateStore } from "../storage/state.js";
 import { logger } from "../util/logger.js";
 import { handleBuiltinCommand } from "./commands.js";
@@ -23,11 +24,13 @@ export class BridgeRuntime {
 		private readonly config: BridgeConfig,
 		private readonly agents: Map<string, AgentProvider>,
 		private readonly channel: ChannelAdapter,
+		private readonly configPath?: string,
 	) {}
 
 	async start(): Promise<void> {
 		await this.channel.start({
 			onMessage: (message) => this.handleMessage(message),
+			authorizeUser: (userId) => this.authorizeUser(userId),
 			log: (message) => logger.info(message, "channel"),
 			error: (message) => logger.error(message, "channel"),
 		});
@@ -156,5 +159,19 @@ export class BridgeRuntime {
 		return setInterval(() => {
 			void channel.sendTyping?.(conversationId);
 		}, TYPING_INTERVAL_MS);
+	}
+
+	private authorizeUser(userId: string): void {
+		if (!userId || this.config.allowUsers.includes(userId)) return;
+		try {
+			addAllowUserToConfig(userId, this.configPath);
+			this.config.allowUsers.push(userId);
+			logger.info(`已自动加入 allowUsers：${userId}`, this.channel.name);
+		} catch (err) {
+			logger.error(
+				`自动写入 allowUsers 失败：${err instanceof Error ? err.message : String(err)}`,
+				this.channel.name,
+			);
+		}
 	}
 }
